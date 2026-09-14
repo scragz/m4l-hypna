@@ -5,12 +5,80 @@ import wave
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1] / 'device'
-raw = (root/'Hypna.amxd').read_bytes()
-assert raw[:4] == b'ampf' and raw[8:12] == b'iiii'
-assert raw[24:28] == b'ptch'
-assert struct.unpack('<I', raw[28:32])[0] == len(raw)-32
-doc = json.loads(raw[32:].rstrip(b'\0'))
-assert doc == json.loads((root/'Hypna.maxpat').read_text())
+
+
+def outer(name):
+    """Read the ampf/meta/ptch chunks. Outer chunk sizes are little-endian."""
+    raw = (name if isinstance(name, bytes) else (root/name).read_bytes())
+    assert raw[:4] == b'ampf' and raw[8:12] == b'iiii'
+    assert raw[12:16] == b'meta' and struct.unpack('<I', raw[16:20])[0] == 4
+    assert raw[24:28] == b'ptch'
+    assert struct.unpack('<I', raw[28:32])[0] == len(raw)-32
+    return raw[32:]
+
+
+def chunks(data):
+    """Walk collective chunks. Sizes are big-endian and include the 8-byte header."""
+    fields = []
+    while len(data) >= 8:
+        tag = data[:4].decode('ascii')
+        size = struct.unpack('>I', data[4:8])[0]
+        assert 8 <= size <= len(data), tag
+        fields.append((tag, data[8:size]))
+        data = data[size:]
+    assert not data
+    return fields
+
+
+def unfreeze(payload):
+    """Parse an mx@c collective back into {name: (type, flag, bytes)}."""
+    assert payload[:4] == b'mx@c'
+    assert struct.unpack('>I', payload[4:8])[0] == 16
+    footer_at = int.from_bytes(payload[8:16], 'big')
+    footer = payload[footer_at:]
+    [(tag, directory)] = chunks(footer)
+    assert tag == 'dlst'
+    contents, covered = {}, 16
+    for tag, record in chunks(directory):
+        assert tag == 'dire'
+        fields = dict(chunks(record))
+        name = fields['fnam'].rstrip(b'\0').decode('ascii')
+        offset = struct.unpack('>I', fields['of32'])[0]
+        size = struct.unpack('>I', fields['sz32'])[0]
+        # Entries are stored back to back between the header and the footer.
+        assert offset == covered, name
+        covered += size
+        assert struct.unpack('>I', fields['vers'])[0] == 0
+        # HFS+ dates count seconds from 1904; anything else is a bad timestamp.
+        assert struct.unpack('>I', fields['mdat'])[0] > 2082844800
+        contents[name] = (fields['type'].rstrip(b'\0').decode('ascii'),
+                          struct.unpack('>I', fields['flag'])[0],
+                          payload[offset:offset+size])
+    assert covered == footer_at
+    return contents
+
+
+source = json.loads((root/'Hypna.maxpat').read_text())
+
+# The development device carries the patch alone and reads sibling dependencies.
+assert json.loads(outer('Hypna.dev.amxd').rstrip(b'\0')) == source
+
+# The distribution device is frozen: patcher plus every dependency, in one file.
+frozen = unfreeze(outer('Hypna.amxd'))
+assert list(frozen) == ['Hypna.amxd', 'dream-control.js', 'dream-waves.wav']
+kind, flag, patch_data = frozen['Hypna.amxd']
+assert (kind, flag) == ('JSON', 17)
+doc = json.loads(patch_data.rstrip(b'\0'))
+# Freezing only marks the project read-only; nothing else about the patch moves.
+assert doc['patcher'].pop('project')['readonly'] == 1
+assert source['patcher'].pop('project')['readonly'] == 0
+assert doc == source
+for dependency in ['dream-control.js', 'dream-waves.wav']:
+    kind, flag, data = frozen[dependency]
+    assert flag == 0 and data == (root/dependency).read_bytes(), dependency
+assert frozen['dream-control.js'][0] == 'TEXT'
+assert frozen['dream-waves.wav'][0] == 'WAVE'
+doc = json.loads((root/'Hypna.maxpat').read_text())
 
 def check(p):
     ids = [x['box']['id'] for x in p['boxes']]
@@ -44,4 +112,5 @@ assert boxes['wavetable-message']['text']=='prepend wavetable'
 assert any(e['patchline']['source']==['wavetable-message',0] and e['patchline']['destination']==['synth',0] for e in p['lines'])
 assert 'wavetable' in p['parameters']['parameterbanks']['3']['parameters']
 assert 'dream_machine_factory_v2' in boxes['table']['text']
-print('AMXD container, patch wiring, parameter persistence metadata, presentation bounds, and wavetable checks passed.')
+print('Frozen and development AMXD containers, patch wiring, parameter persistence metadata, '
+      'presentation bounds, and wavetable checks passed.')

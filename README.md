@@ -4,14 +4,15 @@ An initial **audio instrument** based on the five-voice, prime-ratio drone algor
 
 ## Open the device
 
-1. Keep the contents of `device/` together.
-2. Drag `device/Hypna.amxd` onto a MIDI track in Ableton Live with Max for Live.
-3. Turn a voice's **Gate** to **On**. Gates are independent, sustained switches; MIDI notes and Live's transport do not trigger them.
-4. Turn gates off to release the drone. Reverb can continue ringing afterward.
+1. Drag `device/Hypna.amxd` onto a MIDI track in Ableton Live with Max for Live.
+2. Turn a voice's **Gate** to **On**. Gates are independent, sustained switches; MIDI notes and Live's transport do not trigger them.
+3. Turn gates off to release the drone. Reverb can continue ringing afterward.
 
 The initial output is silent: all five gates are off. Output starts at −12 dB. The device has five fixed voices, not keyboard polyphony.
 
-The `.amxd` is an **unfrozen development device** with two required sibling dependencies: `dream-control.js` and `dream-waves.wav`. After loading and checking it in Live, use Max's Freeze Device command and save a separate copy for a self-contained distribution. The editable patch is `device/Hypna.maxpat`.
+`device/Hypna.amxd` is **frozen**: the controller script and the factory wavetable are bundled inside the file, so it is the only file you need to move or share. A frozen patcher opens read-only in Max.
+
+For patch work, `scripts/build.py` also writes `device/Hypna.dev.amxd`, an unfrozen device that reads `dream-control.js` and `dream-waves.wav` as siblings from `device/`. Keep that folder together when using it. The editable patch is `device/Hypna.maxpat`.
 
 ## Tuning
 
@@ -63,7 +64,7 @@ All banks retain integer harmonics of each voice, preserving the prime-ratio tun
 
 For evolving drones, automate **Wave offset** with a slow sweep. The **Wavetable** parameter can also be automated and saved in the Set. The fundamental follows the bank when **Bass wave** is set to **Wavetable**; its dedicated Sine, Triangle, and Square modes remain independent of bank selection.
 
-This release adds a factory selector, not an import browser. Keep the updated `dream-waves.wav` together with the updated device. `dream-waves.json` describes the bank layout for development and is not required at runtime.
+This release adds a factory selector, not an import browser. The wavetable is frozen into `Hypna.amxd`; only the unfrozen `Hypna.dev.amxd` needs `dream-waves.wav` beside it. `dream-waves.json` describes the bank layout for development and is not required at runtime.
 
 ## Differences from the reference
 
@@ -87,8 +88,12 @@ node --test tests/*.test.cjs
 python3 tests/structure.py
 ```
 
-`scripts/build.py` is the source of the patch layout, embedded GenExpr DSP, and factory wavetables. It generates the `.maxpat`, `.amxd`, `.genexpr` inspection copy, `.wav`, and bank manifest. Changes made only to generated files will be overwritten by a rebuild. `device/dream-control.js` is maintained directly.
+`scripts/build.py` is the source of the patch layout, embedded GenExpr DSP, and factory wavetables. It generates `Hypna.maxpat`, the frozen `Hypna.amxd`, the unfrozen `Hypna.dev.amxd`, the `.genexpr` inspection copy, the `.wav`, and the bank manifest. The whole `device/` folder is build output and is not tracked; changes made only to generated files will be overwritten by a rebuild.
 
-The 15 behavioral tests cover tuning/factor restrictions, restored tuning, DSP arithmetic, envelopes, frequency, pan, muting, output bounds, distinct bank/scan sounds, smooth bank changes, rapid selection, independent bass shapes, and table indexing across sample rates. Additional structural checks cover dependency presence, AMXD chunk sizes, selector wiring/persistence metadata, and presentation bounds. The DSP harness translates the generated arithmetic into JavaScript; it **does not compile GenExpr or emulate Live**.
+The controller script is maintained directly at `src/dream-control.js`. The build copies it into `device/` and freezes that copy into the device.
+
+Freezing writes Max's collective format: an `mx@c` header, each file's bytes, then a `dlst` footer of `dire` records naming each file's type, size, offset, and modification date. Chunk sizes inside the collective are big-endian and include their own 8-byte header; the outer `ampf`/`meta`/`ptch` sizes are little-endian. The layout was checked against [Ableton's `maxdiff`](https://github.com/Ableton/maxdevtools/tree/main/maxdiff), which reads the result as a frozen Instrument Device with both dependencies bundled.
+
+The structural checks parse the frozen device back out and compare every bundled entry against the file on disk, so a container mistake fails the build rather than Live. The 15 behavioral tests cover tuning/factor restrictions, restored tuning, DSP arithmetic, envelopes, frequency, pan, muting, output bounds, distinct bank/scan sounds, smooth bank changes, rapid selection, independent bass shapes, and table indexing across sample rates. Additional structural checks cover dependency presence, AMXD chunk sizes, frozen-collective round-tripping, selector wiring/persistence metadata, and presentation bounds. The DSP harness translates the generated arithmetic into JavaScript; it **does not compile GenExpr or emulate Live**.
 
 Implementation references: Cycling '74's [GenExpr documentation](https://docs.cycling74.com/userguide/gen/gen_genexpr/), [Gen operators](https://docs.cycling74.com/userguide/gen/gen~_operators/), and [Live parameter controls](https://docs.cycling74.com/reference/live.numbox/). The AMXD header follows the installed Ableton Max Instrument template.

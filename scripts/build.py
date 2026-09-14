@@ -1,6 +1,7 @@
 """Build an editable Max patch and an unfrozen M4L instrument from local sources."""
 import json
 import math
+import shutil
 import struct
 import sys
 import wave
@@ -8,8 +9,11 @@ from array import array
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
 OUT = ROOT / "device"
 OUT.mkdir(exist_ok=True)
+# HFS+ timestamps, which the collective directory uses, count from 1 Jan 1904.
+MAC_EPOCH = 2082844800
 BANKS = ['Classic', 'Bloom', 'Hollow', 'Glass', 'Formant', 'Reed', 'Fold', 'Comb']
 FRAMES = 16
 CYCLE = 2048
@@ -345,7 +349,10 @@ def make_patch(code):
     for i in range(4):
         gen['boxes'].append(dict(box=dict(id='out'+str(i),maxclass='newobj',text='out '+str(i+1),patching_rect=[40+i*130,640,70,22])))
         gen['lines'].append(dict(patchline=dict(source=['code',i],destination=['out'+str(i),0])))
-    box('control', text='js dream-control.js', rect=[30, 225, 160, 22], numinlets=1, numoutlets=1)
+    # Max records a js object's script in saved_object_attributes; freezing
+    # resolves the dependency from there, not from the box text.
+    box('control', text='js dream-control.js', rect=[30, 225, 160, 22], numinlets=1, numoutlets=1,
+        saved_object_attributes=dict(filename='dream-control.js', parameter_enable=0))
     box('synth', text='gen~', rect=[400, 290, 100, 22], numinlets=1, numoutlets=4, outlettype=['signal']*4, patcher=gen)
     wire('control','synth')
     box('table',text='buffer~ dream_machine_factory_v2 dream-waves.wav',rect=[30,260,345,22])
@@ -368,14 +375,85 @@ def make_patch(code):
     return dict(patcher=patch)
 
 
+def amxd(payload, meta=0):
+    """Wrap a ptch payload in the outer chunks. Outer sizes are little-endian.
+
+    Same ampf/iiii/meta/ptch layout as Live's installed Max Instrument template.
+    The meta value is a big-endian format revision; frozen devices written by
+    Max carry 7, while the unfrozen template leaves it at 0.
+    """
+    return (b'ampf' + struct.pack('<I', 4) + b'iiii'
+            + b'meta' + struct.pack('<I', 4) + struct.pack('>I', meta)
+            + b'ptch' + struct.pack('<I', len(payload)) + payload)
+
+
+def chunk(tag, data):
+    """A collective chunk: tag, big-endian size counting this 8-byte header, data."""
+    return tag.encode() + struct.pack('>I', len(data) + 8) + data
+
+
+def padded(name):
+    """Collective names are null-terminated and padded to a four-byte boundary."""
+    raw = name.encode()
+    return raw + b'\0' * (4 - len(raw) % 4)
+
+
+def mac_time(path):
+    return int(path.stat().st_mtime) + MAC_EPOCH
+
+
+def collective(name, document, dependencies):
+    """Bundle the patcher and every dependency into an mx@c collective.
+
+    Layout: a sixteen-byte header, the file payloads back to back, then a 'dlst'
+    footer of one 'dire' record per file. Header words two and three are a single
+    64-bit big-endian offset to that footer. Each record carries the file's type
+    code, name, size, absolute offset, and modification date, so Max can resolve
+    `js dream-control.js` and `buffer~ ... dream-waves.wav` from inside the
+    device instead of from sibling files on disk.
+    """
+    entries = []
+    for dependency in dependencies:
+        path = OUT / dependency['name']
+        entries.append(dict(name=dependency['name'], type=dependency['type'], flag=0,
+                            data=path.read_bytes(), mdat=mac_time(path)))
+    # The patcher itself is the first entry, named after the device, and is the
+    # only one flagged 17. Max writes patcher text with a trailing newline/null.
+    stamps = [entry['mdat'] for entry in entries] + [mac_time(Path(__file__).resolve())]
+    entries.insert(0, dict(name=name, type='JSON', flag=17, mdat=max(stamps),
+                           data=json.dumps(document, indent=2).encode() + b'\n\0'))
+
+    offset = 16
+    directory = b''
+    for entry in entries:
+        directory += chunk('dire', b''.join([
+            chunk('type', entry['type'].encode()),
+            chunk('fnam', padded(entry['name'])),
+            chunk('sz32', struct.pack('>I', len(entry['data']))),
+            chunk('of32', struct.pack('>I', offset)),
+            chunk('vers', struct.pack('>I', 0)),
+            chunk('flag', struct.pack('>I', entry['flag'])),
+            chunk('mdat', struct.pack('>I', entry['mdat'])),
+        ]))
+        offset += len(entry['data'])
+    return (b'mx@c' + struct.pack('>III', 16, 0, offset)
+            + b''.join(entry['data'] for entry in entries) + chunk('dlst', directory))
+
+
 if __name__ == '__main__':
     make_waves()
     code = dsp_code()
-    (ROOT/'device/dream-engine.genexpr').write_text(code)
+    (OUT/'dream-engine.genexpr').write_text(code)
+    # copy2 keeps the source timestamp, which the frozen directory records.
+    shutil.copy2(SRC/'dream-control.js', OUT/'dream-control.js')
     data = json.dumps(make_patch(code), indent=2).encode()+b'\n'
     (OUT/'Hypna.maxpat').write_bytes(data)
-    # Same ampf/iiii/meta/ptch layout as Live's installed Max Instrument template.
-    payload = data + b'\0'
-    header = b'ampf'+struct.pack('<I',4)+b'iiii'+b'meta'+struct.pack('<II',4,0)+b'ptch'+struct.pack('<I',len(payload))
-    (OUT/'Hypna.amxd').write_bytes(header+payload)
-    print('Built Hypna.maxpat, Hypna.amxd, and factory wavetable.')
+    # Development device: the patch alone, reading its dependencies from device/.
+    (OUT/'Hypna.dev.amxd').write_bytes(amxd(data + b'\0'))
+    # Distribution device: frozen, so the controller script and factory wavetable
+    # travel inside the file. A frozen patcher is read-only in Max.
+    document = json.loads(data)
+    document['patcher']['project'] = dict(document['patcher']['project'], readonly=1)
+    (OUT/'Hypna.amxd').write_bytes(amxd(
+        collective('Hypna.amxd', document, document['patcher']['dependency_cache']), meta=7))
+    print('Built Hypna.maxpat, frozen Hypna.amxd, Hypna.dev.amxd, and factory wavetable.')
