@@ -1,0 +1,24 @@
+{
+  "banks": [
+    "Classic",
+    "Bloom",
+    "Hollow",
+    "Glass",
+    "Formant",
+    "Reed",
+    "Fold",
+    "Comb"
+  ],
+  "frames": 16,
+  "cycle_samples": 2048,
+  "harmonics": [
+    64,
+    32,
+    16,
+    8,
+    4,
+    2,
+    1
+  ],
+  "layout": "bank, mip, frame, sample"
+}
