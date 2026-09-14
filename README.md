@@ -88,9 +88,25 @@ node --test tests/*.test.cjs
 python3 tests/structure.py
 ```
 
-`scripts/build.py` is the source of the patch layout, embedded GenExpr DSP, and factory wavetables. It generates `Hypna.maxpat`, the frozen `Hypna.amxd`, the unfrozen `Hypna.dev.amxd`, the `.genexpr` inspection copy, the `.wav`, and the bank manifest. The whole `device/` folder is build output and is not tracked; changes made only to generated files will be overwritten by a rebuild.
+Everything hand-maintained lives in `src/`; the whole `device/` folder is build output and is not tracked, so changes made only to generated files are overwritten by a rebuild.
 
-The controller script is maintained directly at `src/dream-control.js`. The build copies it into `device/` and freezes that copy into the device.
+| `src/` | role |
+| --- | --- |
+| `dream-control.js` | The tuning controller, copied into `device/` and frozen into the device. |
+| `dream-engine.genexpr` | The GenExpr DSP, as real GenExpr. `scripts/build.py` expands it into the `gen~` patcher. |
+| `dream-waves.json` | Declares the wavetable layout: banks, frames, cycle length, and mip harmonics. |
+
+`src/dream-waves.json` is the single layout source. It drives the generated tables **and** supplies the constants the DSP indexes them with, so a layout change reaches both. `tests/structure.py` asserts the two agree; before, the indexing constants were hardcoded in the DSP and a change to the frame count would have silently produced wrong offsets.
+
+`src/dream-engine.genexpr` uses three markers, because GenExpr has no arrays of `History` and the five voices must be unrolled:
+
+- `//@voices` … `//@end` repeats once per voice, with `$V` as the voice index and `$F` as that voice's default frequency.
+- `//@fundamental` … `//@end`, inside a voices block, emits for voice 0 only — the `Bass wave` overrides.
+- `//@doc` … `//@end` documents the template and is stripped from the output.
+
+Any other `$NAME` is a layout constant from the manifest.
+
+`scripts/build.py` owns the patch layout and the wavetable math (`spectrum()` defines the eight banks). It generates `Hypna.maxpat`, the frozen `Hypna.amxd`, the unfrozen `Hypna.dev.amxd`, the expanded `.genexpr`, and the `.wav`. The wavetable is deterministic output of `spectrum()` and the declared layout, so it is generated rather than tracked.
 
 Freezing writes Max's collective format: an `mx@c` header, each file's bytes, then a `dlst` footer of `dire` records naming each file's type, size, offset, and modification date. Chunk sizes inside the collective are big-endian and include their own 8-byte header; the outer `ampf`/`meta`/`ptch` sizes are little-endian. The layout was checked against [Ableton's `maxdiff`](https://github.com/Ableton/maxdevtools/tree/main/maxdiff), which reads the result as a frozen Instrument Device with both dependencies bundled.
 

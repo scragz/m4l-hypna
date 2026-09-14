@@ -1,6 +1,7 @@
 """Build an editable Max patch and an unfrozen M4L instrument from local sources."""
 import json
 import math
+import re
 import shutil
 import struct
 import sys
@@ -14,23 +15,28 @@ OUT = ROOT / "device"
 OUT.mkdir(exist_ok=True)
 # HFS+ timestamps, which the collective directory uses, count from 1 Jan 1904.
 MAC_EPOCH = 2082844800
-BANKS = ['Classic', 'Bloom', 'Hollow', 'Glass', 'Formant', 'Reed', 'Fold', 'Comb']
-FRAMES = 16
-CYCLE = 2048
-HARMONICS = [64, 32, 16, 8, 4, 2, 1]
+
+# src/dream-waves.json declares the wavetable layout. It generates the tables
+# and supplies the constants the DSP indexes them with, so the two cannot drift.
+LAYOUT = json.loads((SRC/'dream-waves.json').read_text())
+BANKS = LAYOUT['banks']
+FRAMES = LAYOUT['frames']
+CYCLE = LAYOUT['cycle_samples']
+HARMONICS = LAYOUT['harmonics']
+PARTIALS = HARMONICS[0]
 
 
 def spectrum(bank, t):
     """Original, phase-aligned spectral journeys, expressed as sine partials."""
     result = []
-    for h in range(1, 65):
+    for h in range(1, PARTIALS+1):
         if bank == 0:
             classic = [1.0 if h == 1 else 0.0,
                        8 / math.pi**2 * (-1)**((h-1)//2) / h**2 if h % 2 else 0.0,
                        0.5 / h, 0.8 / h if h % 2 else 0.0]
             frame = min(int(t * 3), 2)
             blend = t * 3 - frame
-            value = ((1-blend)*classic[frame] + blend*classic[frame+1]) if h <= 32 else 0
+            value = ((1-blend)*classic[frame] + blend*classic[frame+1]) if h <= PARTIALS//2 else 0
         elif bank == 1:  # Open a soft spectrum into a full, bright harmonic stack.
             value = math.exp(-(h/(1.3+40*t*t))**2) / h**0.95
         elif bank == 2:  # Odd harmonics; a resonant band travels up the hollow body.
@@ -54,7 +60,7 @@ def spectrum(bank, t):
 def make_waves():
     # Bank -> mip level -> morph frame -> sample. Compute each partial once,
     # snapshot bandwidth levels, and apply the full frame's gain to every mip.
-    sines = [[math.sin(2*math.pi*h*i/CYCLE) for i in range(CYCLE)] for h in range(1, 65)]
+    sines = [[math.sin(2*math.pi*h*i/CYCLE) for i in range(CYCLE)] for h in range(1, PARTIALS+1)]
     with wave.open(str(OUT / "dream-waves.wav"), "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
@@ -81,173 +87,93 @@ def make_waves():
                     levels[h].append(row.tobytes())
             for h in HARMONICS:
                 for row in levels[h]: wav.writeframesraw(row)
-    (OUT/'dream-waves.json').write_text(json.dumps(dict(banks=BANKS, frames=FRAMES,
-        cycle_samples=CYCLE, harmonics=HARMONICS, layout='bank, mip, frame, sample'), indent=2)+'\n')
+    shutil.copy2(SRC/'dream-waves.json', OUT/'dream-waves.json')
+
+
+def constants():
+    """Layout constants the DSP indexes the wavetable with, all derived from
+    src/dream-waves.json so a layout change reaches the code that reads it."""
+    return {
+        'BANKS': len(BANKS), 'BANKMAX': len(BANKS)-1,
+        'MIPS': len(HARMONICS), 'MIPMAX': len(HARMONICS)-1,
+        'PARTIALS': PARTIALS,
+        'FRAMES': FRAMES, 'FRAMEMAX': FRAMES-1, 'BLENDMAX': FRAMES-2,
+        'CYCLE': CYCLE,
+        # Scan centre, the -100..100 offset's scale, and the Classic bank's
+        # triangle frame: all positions within a frame set.
+        'WAVEMID': (FRAMES-1)/2,
+        'WAVESCALE': (FRAMES-1)/200,
+        'TRIANGLE': (FRAMES-1)/3,
+    }
+
+
+def number(value):
+    """Whole numbers print without a decimal point, as hand-written GenExpr would."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return repr(value)
+
+
+def substitute(text, tokens):
+    """Replace the $NAMEs present in `tokens`; leave any others for a later pass."""
+    return re.sub(r'\$([A-Z]+)',
+                  lambda m: number(tokens[m.group(1)]) if m.group(1) in tokens else m.group(0),
+                  text)
+
+
+def read_block(lines, start):
+    """Return the lines between an opening //@ marker and its matching //@end."""
+    depth, body, index = 1, [], start + 1
+    while index < len(lines):
+        marker = lines[index].strip()
+        if marker == '//@end':
+            depth -= 1
+            if depth == 0:
+                return body, index + 1
+        elif marker.startswith('//@'):
+            depth += 1
+        body.append(lines[index])
+        index += 1
+    raise SystemExit('unterminated //@ block in ' + str(SRC/'dream-engine.genexpr'))
+
+
+def emit_voice(body, voice, frequency):
+    """One voice's lines. GenExpr has no arrays of History, so the five voices
+    are unrolled here; //@fundamental sections belong to voice 0 alone."""
+    tokens = {'V': voice, 'F': frequency}
+    lines, index = [], 0
+    while index < len(body):
+        if body[index].strip() == '//@fundamental':
+            nested, index = read_block(body, index)
+            if voice == 0:
+                lines.extend(substitute(line, tokens) for line in nested)
+        else:
+            lines.append(substitute(body[index], tokens))
+            index += 1
+    return lines
+
+
+def expand(template, frequencies):
+    """Expand src/dream-engine.genexpr into the DSP embedded in the patch."""
+    lines = template.splitlines(keepends=True)
+    output, index = [], 0
+    while index < len(lines):
+        marker = lines[index].strip()
+        if marker == '//@doc':
+            _, index = read_block(lines, index)
+        elif marker == '//@voices':
+            body, index = read_block(lines, index)
+            for voice, frequency in enumerate(frequencies):
+                output.extend(emit_voice(body, voice, frequency))
+        else:
+            output.append(lines[index])
+            index += 1
+    return substitute(''.join(output), constants())
 
 
 def dsp_code():
-    code = '''// Factory table: eight banks, seven bandwidth levels, sixteen frames.
-tableosc(ph, hz, position, sr, table, bank) {
-    level = clamp(ceil(log2(max(1, hz * 64 / (sr * 0.45)))), 0, 6);
-    frame = clamp(position, 0, 15);
-    first = min(floor(frame), 14);
-    blend = frame - first;
-    ix = wrap(ph, 0, 1) * 2048;
-    a = floor(ix);
-    b = wrap(a + 1, 0, 2048);
-    frac = ix - a;
-    offset = ((clamp(floor(bank), 0, 7) * 7 + level) * 16 + first) * 2048;
-    w0 = mix(peek(table, offset + a, 0), peek(table, offset + b, 0), frac);
-    w1 = mix(peek(table, offset + 2048 + a, 0), peek(table, offset + 2048 + b, 0), frac);
-    return mix(w0, w1, blend);
-}
-Buffer waves("dream_machine_factory_v2");
-Param wavetable(0);
-Param wavepos(0);
-Param shape(0);
-Param attack(10);
-Param release(1000);
-Param slew(0);
-Param crossfade(20);
-Param master(-12);
-Param wet(0);
-Param revtime(1700);
-Param size(100);
-Param damping(60);
-History smoothwave(7.5);
-History bankfrom(0);
-History bankto(0);
-History bankfade(1);
-History smoothmaster(0);
-History smoothwet(0);
-'''
-    freqs = [58.27, 58.27*42/32, 58.27*56/32, 58.27*62/32, 58.27*63/32]
-    for i, f in enumerate(freqs):
-        code += f'''Param freq{i}({f});
-Param gate{i}(0);
-Param gain{i}(0);
-Param pan{i}(0);
-History env{i}(0);
-History amp{i}(1);
-History panning{i}(0.5);
-History phaseA{i}(0);
-History phaseB{i}(0);
-History targetA{i}({f});
-History targetB{i}({f});
-History actualA{i}({f});
-History actualB{i}({f});
-History side{i}(0);
-History progress{i}(1);
-History accepted{i}({f});
-'''
-    code += '''Delay d0(192000);
-Delay d1(192000);
-Delay d2(192000);
-Delay d3(192000);
-History low0(0);
-History low1(0);
-History low2(0);
-History low3(0);
-smooth = exp(-1 / (0.01 * samplerate));
-smoothwave = mix((clamp(wavepos, -100, 100) + 100) * 0.075, smoothwave, smooth);
-// Finish each 50 ms bank fade, then accept the latest selection. All voices
-// share its timing; rapid automation never cuts off an unfinished transition.
-requestedbank = clamp(floor(wavetable + 0.5), 0, 7);
-if ((requestedbank != bankto) && (bankfade >= 1)) {
-    bankfrom = bankto;
-    bankto = requestedbank;
-    bankfade = 0;
-}
-bankfade = min(1, bankfade + 1 / (0.05 * samplerate));
-bankblend = 0.5 - 0.5 * cos(bankfade * pi);
-smoothmaster = mix(pow(10, master / 20), smoothmaster, smooth);
-smoothwet = mix(clamp(wet * 0.01, 0, 1), smoothwet, smooth);
-slewcoeff = slew <= 0 ? 0 : exp(-1 / (max(slew, 0.01) * 0.001 * samplerate));
-left = 0;
-right = 0;
-'''
-    for i in range(5):
-        code += f'''
-// Voice {i}: finish the current crossfade before accepting the latest retune.
-// The outgoing oscillator is held; the incoming oscillator starts phase-aligned.
-if ((freq{i} != accepted{i}) && (progress{i} >= 1)) {{
-    if (side{i} < 0.5) {{ targetB{i} = freq{i}; phaseB{i} = phaseA{i}; actualB{i} = actualA{i}; }}
-    else {{ targetA{i} = freq{i}; phaseA{i} = phaseB{i}; actualA{i} = actualB{i}; }}
-    side{i} = 1 - side{i};
-    progress{i} = 0;
-    accepted{i} = freq{i};
-}}
-progress{i} = min(1, progress{i} + 1 / max(1, crossfade * 0.001 * samplerate));
-actualA{i} = mix(targetA{i}, actualA{i}, slewcoeff);
-actualB{i} = mix(targetB{i}, actualB{i}, slewcoeff);
-fa{i} = clamp(actualA{i}, 0.000001, samplerate * 0.45);
-fb{i} = clamp(actualB{i}, 0.000001, samplerate * 0.45);
-phaseA{i} = wrap(phaseA{i} + fa{i} / samplerate, 0, 1);
-phaseB{i} = wrap(phaseB{i} + fb{i} / samplerate, 0, 1);
-pos{i} = smoothwave;
-'''
-        if i == 0:
-            code += 'pos0 = shape == 2 ? 5 : (shape == 3 ? 15 : smoothwave);\n'
-        code += f'''voicebank{i} = bankto;
-oldbank{i} = bankfrom;
-'''
-        if i == 0:
-            code += 'voicebank0 = shape > 0 ? 0 : bankto;\noldbank0 = shape > 0 ? 0 : bankfrom;\n'
-        code += f'''a{i} = tableosc(phaseA{i}, fa{i}, pos{i}, samplerate, waves, voicebank{i});
-b{i} = tableosc(phaseB{i}, fb{i}, pos{i}, samplerate, waves, voicebank{i});
-if (bankfade < 1) {{
-    olda{i} = tableosc(phaseA{i}, fa{i}, pos{i}, samplerate, waves, oldbank{i});
-    oldb{i} = tableosc(phaseB{i}, fb{i}, pos{i}, samplerate, waves, oldbank{i});
-    a{i} = mix(olda{i}, a{i}, bankblend);
-    b{i} = mix(oldb{i}, b{i}, bankblend);
-}}
-'''
-        if i == 0:
-            code += 'a0 = shape == 1 ? sin(phaseA0 * twopi) : a0;\nb0 = shape == 1 ? sin(phaseB0 * twopi) : b0;\n'
-        code += f'''// Do not fold an out-of-band ratio down to an unrelated audible pitch.
-a{i} = actualA{i} < samplerate * 0.45 ? a{i} : 0;
-b{i} = actualB{i} < samplerate * 0.45 ? b{i} : 0;
-blend{i} = 0.5 - 0.5 * cos(progress{i} * pi);
-weight{i} = side{i} < 0.5 ? 1 - blend{i} : blend{i};
-osc{i} = mix(a{i}, b{i}, weight{i});
-duration{i} = gate{i} > 0.5 ? attack : release;
-env{i} = clamp(env{i} + (gate{i} > 0.5 ? 1 : -1) / max(1, duration{i} * 0.001 * samplerate), 0, 1);
-amp{i} = mix(gain{i} <= -40 ? 0 : pow(10, gain{i} / 20), amp{i}, smooth);
-panning{i} = mix(clamp((pan{i} + 100) / 200, 0, 1), panning{i}, smooth);
-voice{i} = osc{i} * env{i} * amp{i} * 0.2;
-left = left + voice{i} * cos(panning{i} * pi * 0.5);
-right = right + voice{i} * sin(panning{i} * pi * 0.5);
-'''
-    code += '''// Four-line orthogonal feedback delay network. RT60 is in milliseconds.
-roomscale = 0.25 + 0.75 * clamp(size / 100, 0.01, 1);
-t0 = min(191998, samplerate * 0.0297 * roomscale);
-t1 = min(191998, samplerate * 0.0371 * roomscale);
-t2 = min(191998, samplerate * 0.0411 * roomscale);
-t3 = min(191998, samplerate * 0.0437 * roomscale);
-r0 = d0.read(t0);
-r1 = d1.read(t1);
-r2 = d2.read(t2);
-r3 = d3.read(t3);
-cutoff = 18000 * pow(0.025, clamp(damping / 100, 0, 1));
-lp = exp(-twopi * min(cutoff, samplerate * 0.45) / samplerate);
-low0 = mix(r0, low0, lp);
-low1 = mix(r1, low1, lp);
-low2 = mix(r2, low2, lp);
-low3 = mix(r3, low3, lp);
-decay = max(0.4, revtime * 0.001) * samplerate;
-d0.write(left + 0.5 * (low0 + low1 + low2 + low3) * pow(0.001, t0 / decay));
-d1.write(right + 0.5 * (low0 - low1 + low2 - low3) * pow(0.001, t1 / decay));
-d2.write(left + 0.5 * (low0 + low1 - low2 - low3) * pow(0.001, t2 / decay));
-d3.write(right + 0.5 * (low0 - low1 - low2 + low3) * pow(0.001, t3 / decay));
-wetleft = (r0 + r2) * 0.25;
-wetright = (r1 + r3) * 0.25;
-out1 = tanh(mix(left, wetleft, smoothwet) * smoothmaster);
-out2 = tanh(mix(right, wetright, smoothwet) * smoothmaster);
-// Inspection taps, not routed to Live's main outputs.
-out3 = osc0;
-out4 = env0;
-'''
-    return code
+    frequencies = [58.27, 58.27*42/32, 58.27*56/32, 58.27*62/32, 58.27*63/32]
+    return expand((SRC/'dream-engine.genexpr').read_text(), frequencies)
 
 
 def make_patch(code):

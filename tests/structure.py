@@ -1,5 +1,6 @@
 """Packaging/wiring checks. These do not substitute for opening the device in Live."""
 import json
+import re
 import struct
 import wave
 from pathlib import Path
@@ -103,9 +104,30 @@ for name,b in boxes.items():
 for dep in p['dependency_cache']:
     assert (root/dep['name']).is_file()
 assert boxes['synth']['patcher']['boxes'][0]['box']['code']==(root/'dream-engine.genexpr').read_text()
-with wave.open(str(root/'dream-waves.wav')) as w:
-    assert (w.getnchannels(),w.getsampwidth(),w.getnframes())==(1,2,8*7*16*2048)
 catalog=json.loads((root/'dream-waves.json').read_text())
+banks,mips,frames,cycle=len(catalog['banks']),len(catalog['harmonics']),catalog['frames'],catalog['cycle_samples']
+with wave.open(str(root/'dream-waves.wav')) as w:
+    assert (w.getnchannels(),w.getsampwidth(),w.getnframes())==(1,2,banks*mips*frames*cycle)
+
+# The DSP indexes the table with constants expanded from the same manifest that
+# generated it. If a layout change ever reaches one and not the other, the device
+# reads the wrong offsets and still sounds plausible, so assert they agree.
+dsp=(root/'dream-engine.genexpr').read_text()
+indexing=re.search(r'offset = \(\(clamp\(floor\(bank\), 0, (\d+)\) \* (\d+) \+ level\) \* (\d+) \+ first\) \* (\d+);',dsp)
+assert indexing, 'wavetable indexing line not found in the generated DSP'
+assert [int(n) for n in indexing.groups()]==[banks-1,mips,frames,cycle]
+assert 'frame = clamp(position, 0, %d);'%(frames-1) in dsp
+assert 'first = min(floor(frame), %d);'%(frames-2) in dsp
+assert 'hz * %d / (sr * 0.45)'%catalog['harmonics'][0] in dsp
+assert 'clamp(floor(wavetable + 0.5), 0, %d)'%(banks-1) in dsp
+# Positions within a frame set may be fractional; tableosc interpolates. Format
+# them the way the generator does, or this check only passes for some layouts.
+literal=lambda v: repr(int(v) if float(v).is_integer() else v)
+assert '+ 100) * %s,'%literal((frames-1)/200) in dsp
+assert 'History smoothwave(%s);'%literal((frames-1)/2) in dsp
+# The template's voice block is unrolled once per voice, fundamental extras aside.
+assert dsp.count('// Voice ')==5 and dsp.count('osc4 = mix(a4, b4, weight4);')==1
+assert 'pos0 = shape == 2 ? %s :'%literal((frames-1)/3) in dsp
 assert boxes['wavetable']['saved_attribute_attributes']['valueof']['parameter_enum']==catalog['banks']
 assert boxes['wavetable']['saved_attribute_attributes']['valueof']['parameter_initial']==[0]
 assert boxes['wavetable-message']['text']=='prepend wavetable'

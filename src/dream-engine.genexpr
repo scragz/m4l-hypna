@@ -1,16 +1,24 @@
-// Factory table: eight banks, seven bandwidth levels, sixteen frames.
+//@doc
+// Build input for scripts/build.py; device/dream-engine.genexpr is its output.
+// `//@voices` blocks repeat once per voice, with $V as the voice index and $F
+// as that voice's default frequency. A `//@fundamental` block inside one emits
+// for voice 0 only. Every other $NAME is a layout constant read from
+// src/dream-waves.json, so the wavetable and the code indexing it cannot drift
+// apart. This block itself is stripped from the output.
+//@end
+// Factory table: $BANKS banks, $MIPS bandwidth levels, $FRAMES frames.
 tableosc(ph, hz, position, sr, table, bank) {
-    level = clamp(ceil(log2(max(1, hz * 64 / (sr * 0.45)))), 0, 6);
-    frame = clamp(position, 0, 15);
-    first = min(floor(frame), 14);
+    level = clamp(ceil(log2(max(1, hz * $PARTIALS / (sr * 0.45)))), 0, $MIPMAX);
+    frame = clamp(position, 0, $FRAMEMAX);
+    first = min(floor(frame), $BLENDMAX);
     blend = frame - first;
-    ix = wrap(ph, 0, 1) * 2048;
+    ix = wrap(ph, 0, 1) * $CYCLE;
     a = floor(ix);
-    b = wrap(a + 1, 0, 2048);
+    b = wrap(a + 1, 0, $CYCLE);
     frac = ix - a;
-    offset = ((clamp(floor(bank), 0, 7) * 7 + level) * 16 + first) * 2048;
+    offset = ((clamp(floor(bank), 0, $BANKMAX) * $MIPS + level) * $FRAMES + first) * $CYCLE;
     w0 = mix(peek(table, offset + a, 0), peek(table, offset + b, 0), frac);
-    w1 = mix(peek(table, offset + 2048 + a, 0), peek(table, offset + 2048 + b, 0), frac);
+    w1 = mix(peek(table, offset + $CYCLE + a, 0), peek(table, offset + $CYCLE + b, 0), frac);
     return mix(w0, w1, blend);
 }
 Buffer waves("dream_machine_factory_v2");
@@ -26,92 +34,30 @@ Param wet(0);
 Param revtime(1700);
 Param size(100);
 Param damping(60);
-History smoothwave(7.5);
+History smoothwave($WAVEMID);
 History bankfrom(0);
 History bankto(0);
 History bankfade(1);
 History smoothmaster(0);
 History smoothwet(0);
-Param freq0(58.27);
-Param gate0(0);
-Param gain0(0);
-Param pan0(0);
-History env0(0);
-History amp0(1);
-History panning0(0.5);
-History phaseA0(0);
-History phaseB0(0);
-History targetA0(58.27);
-History targetB0(58.27);
-History actualA0(58.27);
-History actualB0(58.27);
-History side0(0);
-History progress0(1);
-History accepted0(58.27);
-Param freq1(76.479375);
-Param gate1(0);
-Param gain1(0);
-Param pan1(0);
-History env1(0);
-History amp1(1);
-History panning1(0.5);
-History phaseA1(0);
-History phaseB1(0);
-History targetA1(76.479375);
-History targetB1(76.479375);
-History actualA1(76.479375);
-History actualB1(76.479375);
-History side1(0);
-History progress1(1);
-History accepted1(76.479375);
-Param freq2(101.97250000000001);
-Param gate2(0);
-Param gain2(0);
-Param pan2(0);
-History env2(0);
-History amp2(1);
-History panning2(0.5);
-History phaseA2(0);
-History phaseB2(0);
-History targetA2(101.97250000000001);
-History targetB2(101.97250000000001);
-History actualA2(101.97250000000001);
-History actualB2(101.97250000000001);
-History side2(0);
-History progress2(1);
-History accepted2(101.97250000000001);
-Param freq3(112.89812500000001);
-Param gate3(0);
-Param gain3(0);
-Param pan3(0);
-History env3(0);
-History amp3(1);
-History panning3(0.5);
-History phaseA3(0);
-History phaseB3(0);
-History targetA3(112.89812500000001);
-History targetB3(112.89812500000001);
-History actualA3(112.89812500000001);
-History actualB3(112.89812500000001);
-History side3(0);
-History progress3(1);
-History accepted3(112.89812500000001);
-Param freq4(114.7190625);
-Param gate4(0);
-Param gain4(0);
-Param pan4(0);
-History env4(0);
-History amp4(1);
-History panning4(0.5);
-History phaseA4(0);
-History phaseB4(0);
-History targetA4(114.7190625);
-History targetB4(114.7190625);
-History actualA4(114.7190625);
-History actualB4(114.7190625);
-History side4(0);
-History progress4(1);
-History accepted4(114.7190625);
+//@voices
+Param freq$V($F);
+Param gate$V(0);
+Param gain$V(0);
+Param pan$V(0);
+History env$V(0);
+History amp$V(1);
+History panning$V(0.5);
+History phaseA$V(0);
+History phaseB$V(0);
+History targetA$V($F);
+History targetB$V($F);
+History actualA$V($F);
+History actualB$V($F);
+History side$V(0);
+History progress$V(1);
+History accepted$V($F);
+//@end
 Delay d0(192000);
 Delay d1(192000);
 Delay d2(192000);
@@ -121,10 +67,10 @@ History low1(0);
 History low2(0);
 History low3(0);
 smooth = exp(-1 / (0.01 * samplerate));
-smoothwave = mix((clamp(wavepos, -100, 100) + 100) * 0.075, smoothwave, smooth);
+smoothwave = mix((clamp(wavepos, -100, 100) + 100) * $WAVESCALE, smoothwave, smooth);
 // Finish each 50 ms bank fade, then accept the latest selection. All voices
 // share its timing; rapid automation never cuts off an unfinished transition.
-requestedbank = clamp(floor(wavetable + 0.5), 0, 7);
+requestedbank = clamp(floor(wavetable + 0.5), 0, $BANKMAX);
 if ((requestedbank != bankto) && (bankfade >= 1)) {
     bankfrom = bankto;
     bankto = requestedbank;
@@ -137,216 +83,60 @@ smoothwet = mix(clamp(wet * 0.01, 0, 1), smoothwet, smooth);
 slewcoeff = slew <= 0 ? 0 : exp(-1 / (max(slew, 0.01) * 0.001 * samplerate));
 left = 0;
 right = 0;
+//@voices
 
-// Voice 0: finish the current crossfade before accepting the latest retune.
+// Voice $V: finish the current crossfade before accepting the latest retune.
 // The outgoing oscillator is held; the incoming oscillator starts phase-aligned.
-if ((freq0 != accepted0) && (progress0 >= 1)) {
-    if (side0 < 0.5) { targetB0 = freq0; phaseB0 = phaseA0; actualB0 = actualA0; }
-    else { targetA0 = freq0; phaseA0 = phaseB0; actualA0 = actualB0; }
-    side0 = 1 - side0;
-    progress0 = 0;
-    accepted0 = freq0;
+if ((freq$V != accepted$V) && (progress$V >= 1)) {
+    if (side$V < 0.5) { targetB$V = freq$V; phaseB$V = phaseA$V; actualB$V = actualA$V; }
+    else { targetA$V = freq$V; phaseA$V = phaseB$V; actualA$V = actualB$V; }
+    side$V = 1 - side$V;
+    progress$V = 0;
+    accepted$V = freq$V;
 }
-progress0 = min(1, progress0 + 1 / max(1, crossfade * 0.001 * samplerate));
-actualA0 = mix(targetA0, actualA0, slewcoeff);
-actualB0 = mix(targetB0, actualB0, slewcoeff);
-fa0 = clamp(actualA0, 0.000001, samplerate * 0.45);
-fb0 = clamp(actualB0, 0.000001, samplerate * 0.45);
-phaseA0 = wrap(phaseA0 + fa0 / samplerate, 0, 1);
-phaseB0 = wrap(phaseB0 + fb0 / samplerate, 0, 1);
-pos0 = smoothwave;
-pos0 = shape == 2 ? 5 : (shape == 3 ? 15 : smoothwave);
-voicebank0 = bankto;
-oldbank0 = bankfrom;
+progress$V = min(1, progress$V + 1 / max(1, crossfade * 0.001 * samplerate));
+actualA$V = mix(targetA$V, actualA$V, slewcoeff);
+actualB$V = mix(targetB$V, actualB$V, slewcoeff);
+fa$V = clamp(actualA$V, 0.000001, samplerate * 0.45);
+fb$V = clamp(actualB$V, 0.000001, samplerate * 0.45);
+phaseA$V = wrap(phaseA$V + fa$V / samplerate, 0, 1);
+phaseB$V = wrap(phaseB$V + fb$V / samplerate, 0, 1);
+pos$V = smoothwave;
+//@fundamental
+pos0 = shape == 2 ? $TRIANGLE : (shape == 3 ? $FRAMEMAX : smoothwave);
+//@end
+voicebank$V = bankto;
+oldbank$V = bankfrom;
+//@fundamental
 voicebank0 = shape > 0 ? 0 : bankto;
 oldbank0 = shape > 0 ? 0 : bankfrom;
-a0 = tableosc(phaseA0, fa0, pos0, samplerate, waves, voicebank0);
-b0 = tableosc(phaseB0, fb0, pos0, samplerate, waves, voicebank0);
+//@end
+a$V = tableosc(phaseA$V, fa$V, pos$V, samplerate, waves, voicebank$V);
+b$V = tableosc(phaseB$V, fb$V, pos$V, samplerate, waves, voicebank$V);
 if (bankfade < 1) {
-    olda0 = tableosc(phaseA0, fa0, pos0, samplerate, waves, oldbank0);
-    oldb0 = tableosc(phaseB0, fb0, pos0, samplerate, waves, oldbank0);
-    a0 = mix(olda0, a0, bankblend);
-    b0 = mix(oldb0, b0, bankblend);
+    olda$V = tableosc(phaseA$V, fa$V, pos$V, samplerate, waves, oldbank$V);
+    oldb$V = tableosc(phaseB$V, fb$V, pos$V, samplerate, waves, oldbank$V);
+    a$V = mix(olda$V, a$V, bankblend);
+    b$V = mix(oldb$V, b$V, bankblend);
 }
+//@fundamental
 a0 = shape == 1 ? sin(phaseA0 * twopi) : a0;
 b0 = shape == 1 ? sin(phaseB0 * twopi) : b0;
+//@end
 // Do not fold an out-of-band ratio down to an unrelated audible pitch.
-a0 = actualA0 < samplerate * 0.45 ? a0 : 0;
-b0 = actualB0 < samplerate * 0.45 ? b0 : 0;
-blend0 = 0.5 - 0.5 * cos(progress0 * pi);
-weight0 = side0 < 0.5 ? 1 - blend0 : blend0;
-osc0 = mix(a0, b0, weight0);
-duration0 = gate0 > 0.5 ? attack : release;
-env0 = clamp(env0 + (gate0 > 0.5 ? 1 : -1) / max(1, duration0 * 0.001 * samplerate), 0, 1);
-amp0 = mix(gain0 <= -40 ? 0 : pow(10, gain0 / 20), amp0, smooth);
-panning0 = mix(clamp((pan0 + 100) / 200, 0, 1), panning0, smooth);
-voice0 = osc0 * env0 * amp0 * 0.2;
-left = left + voice0 * cos(panning0 * pi * 0.5);
-right = right + voice0 * sin(panning0 * pi * 0.5);
-
-// Voice 1: finish the current crossfade before accepting the latest retune.
-// The outgoing oscillator is held; the incoming oscillator starts phase-aligned.
-if ((freq1 != accepted1) && (progress1 >= 1)) {
-    if (side1 < 0.5) { targetB1 = freq1; phaseB1 = phaseA1; actualB1 = actualA1; }
-    else { targetA1 = freq1; phaseA1 = phaseB1; actualA1 = actualB1; }
-    side1 = 1 - side1;
-    progress1 = 0;
-    accepted1 = freq1;
-}
-progress1 = min(1, progress1 + 1 / max(1, crossfade * 0.001 * samplerate));
-actualA1 = mix(targetA1, actualA1, slewcoeff);
-actualB1 = mix(targetB1, actualB1, slewcoeff);
-fa1 = clamp(actualA1, 0.000001, samplerate * 0.45);
-fb1 = clamp(actualB1, 0.000001, samplerate * 0.45);
-phaseA1 = wrap(phaseA1 + fa1 / samplerate, 0, 1);
-phaseB1 = wrap(phaseB1 + fb1 / samplerate, 0, 1);
-pos1 = smoothwave;
-voicebank1 = bankto;
-oldbank1 = bankfrom;
-a1 = tableosc(phaseA1, fa1, pos1, samplerate, waves, voicebank1);
-b1 = tableosc(phaseB1, fb1, pos1, samplerate, waves, voicebank1);
-if (bankfade < 1) {
-    olda1 = tableosc(phaseA1, fa1, pos1, samplerate, waves, oldbank1);
-    oldb1 = tableosc(phaseB1, fb1, pos1, samplerate, waves, oldbank1);
-    a1 = mix(olda1, a1, bankblend);
-    b1 = mix(oldb1, b1, bankblend);
-}
-// Do not fold an out-of-band ratio down to an unrelated audible pitch.
-a1 = actualA1 < samplerate * 0.45 ? a1 : 0;
-b1 = actualB1 < samplerate * 0.45 ? b1 : 0;
-blend1 = 0.5 - 0.5 * cos(progress1 * pi);
-weight1 = side1 < 0.5 ? 1 - blend1 : blend1;
-osc1 = mix(a1, b1, weight1);
-duration1 = gate1 > 0.5 ? attack : release;
-env1 = clamp(env1 + (gate1 > 0.5 ? 1 : -1) / max(1, duration1 * 0.001 * samplerate), 0, 1);
-amp1 = mix(gain1 <= -40 ? 0 : pow(10, gain1 / 20), amp1, smooth);
-panning1 = mix(clamp((pan1 + 100) / 200, 0, 1), panning1, smooth);
-voice1 = osc1 * env1 * amp1 * 0.2;
-left = left + voice1 * cos(panning1 * pi * 0.5);
-right = right + voice1 * sin(panning1 * pi * 0.5);
-
-// Voice 2: finish the current crossfade before accepting the latest retune.
-// The outgoing oscillator is held; the incoming oscillator starts phase-aligned.
-if ((freq2 != accepted2) && (progress2 >= 1)) {
-    if (side2 < 0.5) { targetB2 = freq2; phaseB2 = phaseA2; actualB2 = actualA2; }
-    else { targetA2 = freq2; phaseA2 = phaseB2; actualA2 = actualB2; }
-    side2 = 1 - side2;
-    progress2 = 0;
-    accepted2 = freq2;
-}
-progress2 = min(1, progress2 + 1 / max(1, crossfade * 0.001 * samplerate));
-actualA2 = mix(targetA2, actualA2, slewcoeff);
-actualB2 = mix(targetB2, actualB2, slewcoeff);
-fa2 = clamp(actualA2, 0.000001, samplerate * 0.45);
-fb2 = clamp(actualB2, 0.000001, samplerate * 0.45);
-phaseA2 = wrap(phaseA2 + fa2 / samplerate, 0, 1);
-phaseB2 = wrap(phaseB2 + fb2 / samplerate, 0, 1);
-pos2 = smoothwave;
-voicebank2 = bankto;
-oldbank2 = bankfrom;
-a2 = tableosc(phaseA2, fa2, pos2, samplerate, waves, voicebank2);
-b2 = tableosc(phaseB2, fb2, pos2, samplerate, waves, voicebank2);
-if (bankfade < 1) {
-    olda2 = tableosc(phaseA2, fa2, pos2, samplerate, waves, oldbank2);
-    oldb2 = tableosc(phaseB2, fb2, pos2, samplerate, waves, oldbank2);
-    a2 = mix(olda2, a2, bankblend);
-    b2 = mix(oldb2, b2, bankblend);
-}
-// Do not fold an out-of-band ratio down to an unrelated audible pitch.
-a2 = actualA2 < samplerate * 0.45 ? a2 : 0;
-b2 = actualB2 < samplerate * 0.45 ? b2 : 0;
-blend2 = 0.5 - 0.5 * cos(progress2 * pi);
-weight2 = side2 < 0.5 ? 1 - blend2 : blend2;
-osc2 = mix(a2, b2, weight2);
-duration2 = gate2 > 0.5 ? attack : release;
-env2 = clamp(env2 + (gate2 > 0.5 ? 1 : -1) / max(1, duration2 * 0.001 * samplerate), 0, 1);
-amp2 = mix(gain2 <= -40 ? 0 : pow(10, gain2 / 20), amp2, smooth);
-panning2 = mix(clamp((pan2 + 100) / 200, 0, 1), panning2, smooth);
-voice2 = osc2 * env2 * amp2 * 0.2;
-left = left + voice2 * cos(panning2 * pi * 0.5);
-right = right + voice2 * sin(panning2 * pi * 0.5);
-
-// Voice 3: finish the current crossfade before accepting the latest retune.
-// The outgoing oscillator is held; the incoming oscillator starts phase-aligned.
-if ((freq3 != accepted3) && (progress3 >= 1)) {
-    if (side3 < 0.5) { targetB3 = freq3; phaseB3 = phaseA3; actualB3 = actualA3; }
-    else { targetA3 = freq3; phaseA3 = phaseB3; actualA3 = actualB3; }
-    side3 = 1 - side3;
-    progress3 = 0;
-    accepted3 = freq3;
-}
-progress3 = min(1, progress3 + 1 / max(1, crossfade * 0.001 * samplerate));
-actualA3 = mix(targetA3, actualA3, slewcoeff);
-actualB3 = mix(targetB3, actualB3, slewcoeff);
-fa3 = clamp(actualA3, 0.000001, samplerate * 0.45);
-fb3 = clamp(actualB3, 0.000001, samplerate * 0.45);
-phaseA3 = wrap(phaseA3 + fa3 / samplerate, 0, 1);
-phaseB3 = wrap(phaseB3 + fb3 / samplerate, 0, 1);
-pos3 = smoothwave;
-voicebank3 = bankto;
-oldbank3 = bankfrom;
-a3 = tableosc(phaseA3, fa3, pos3, samplerate, waves, voicebank3);
-b3 = tableosc(phaseB3, fb3, pos3, samplerate, waves, voicebank3);
-if (bankfade < 1) {
-    olda3 = tableosc(phaseA3, fa3, pos3, samplerate, waves, oldbank3);
-    oldb3 = tableosc(phaseB3, fb3, pos3, samplerate, waves, oldbank3);
-    a3 = mix(olda3, a3, bankblend);
-    b3 = mix(oldb3, b3, bankblend);
-}
-// Do not fold an out-of-band ratio down to an unrelated audible pitch.
-a3 = actualA3 < samplerate * 0.45 ? a3 : 0;
-b3 = actualB3 < samplerate * 0.45 ? b3 : 0;
-blend3 = 0.5 - 0.5 * cos(progress3 * pi);
-weight3 = side3 < 0.5 ? 1 - blend3 : blend3;
-osc3 = mix(a3, b3, weight3);
-duration3 = gate3 > 0.5 ? attack : release;
-env3 = clamp(env3 + (gate3 > 0.5 ? 1 : -1) / max(1, duration3 * 0.001 * samplerate), 0, 1);
-amp3 = mix(gain3 <= -40 ? 0 : pow(10, gain3 / 20), amp3, smooth);
-panning3 = mix(clamp((pan3 + 100) / 200, 0, 1), panning3, smooth);
-voice3 = osc3 * env3 * amp3 * 0.2;
-left = left + voice3 * cos(panning3 * pi * 0.5);
-right = right + voice3 * sin(panning3 * pi * 0.5);
-
-// Voice 4: finish the current crossfade before accepting the latest retune.
-// The outgoing oscillator is held; the incoming oscillator starts phase-aligned.
-if ((freq4 != accepted4) && (progress4 >= 1)) {
-    if (side4 < 0.5) { targetB4 = freq4; phaseB4 = phaseA4; actualB4 = actualA4; }
-    else { targetA4 = freq4; phaseA4 = phaseB4; actualA4 = actualB4; }
-    side4 = 1 - side4;
-    progress4 = 0;
-    accepted4 = freq4;
-}
-progress4 = min(1, progress4 + 1 / max(1, crossfade * 0.001 * samplerate));
-actualA4 = mix(targetA4, actualA4, slewcoeff);
-actualB4 = mix(targetB4, actualB4, slewcoeff);
-fa4 = clamp(actualA4, 0.000001, samplerate * 0.45);
-fb4 = clamp(actualB4, 0.000001, samplerate * 0.45);
-phaseA4 = wrap(phaseA4 + fa4 / samplerate, 0, 1);
-phaseB4 = wrap(phaseB4 + fb4 / samplerate, 0, 1);
-pos4 = smoothwave;
-voicebank4 = bankto;
-oldbank4 = bankfrom;
-a4 = tableosc(phaseA4, fa4, pos4, samplerate, waves, voicebank4);
-b4 = tableosc(phaseB4, fb4, pos4, samplerate, waves, voicebank4);
-if (bankfade < 1) {
-    olda4 = tableosc(phaseA4, fa4, pos4, samplerate, waves, oldbank4);
-    oldb4 = tableosc(phaseB4, fb4, pos4, samplerate, waves, oldbank4);
-    a4 = mix(olda4, a4, bankblend);
-    b4 = mix(oldb4, b4, bankblend);
-}
-// Do not fold an out-of-band ratio down to an unrelated audible pitch.
-a4 = actualA4 < samplerate * 0.45 ? a4 : 0;
-b4 = actualB4 < samplerate * 0.45 ? b4 : 0;
-blend4 = 0.5 - 0.5 * cos(progress4 * pi);
-weight4 = side4 < 0.5 ? 1 - blend4 : blend4;
-osc4 = mix(a4, b4, weight4);
-duration4 = gate4 > 0.5 ? attack : release;
-env4 = clamp(env4 + (gate4 > 0.5 ? 1 : -1) / max(1, duration4 * 0.001 * samplerate), 0, 1);
-amp4 = mix(gain4 <= -40 ? 0 : pow(10, gain4 / 20), amp4, smooth);
-panning4 = mix(clamp((pan4 + 100) / 200, 0, 1), panning4, smooth);
-voice4 = osc4 * env4 * amp4 * 0.2;
-left = left + voice4 * cos(panning4 * pi * 0.5);
-right = right + voice4 * sin(panning4 * pi * 0.5);
+a$V = actualA$V < samplerate * 0.45 ? a$V : 0;
+b$V = actualB$V < samplerate * 0.45 ? b$V : 0;
+blend$V = 0.5 - 0.5 * cos(progress$V * pi);
+weight$V = side$V < 0.5 ? 1 - blend$V : blend$V;
+osc$V = mix(a$V, b$V, weight$V);
+duration$V = gate$V > 0.5 ? attack : release;
+env$V = clamp(env$V + (gate$V > 0.5 ? 1 : -1) / max(1, duration$V * 0.001 * samplerate), 0, 1);
+amp$V = mix(gain$V <= -40 ? 0 : pow(10, gain$V / 20), amp$V, smooth);
+panning$V = mix(clamp((pan$V + 100) / 200, 0, 1), panning$V, smooth);
+voice$V = osc$V * env$V * amp$V * 0.2;
+left = left + voice$V * cos(panning$V * pi * 0.5);
+right = right + voice$V * sin(panning$V * pi * 0.5);
+//@end
 // Four-line orthogonal feedback delay network. RT60 is in milliseconds.
 roomscale = 0.25 + 0.75 * clamp(size / 100, 0.01, 1);
 t0 = min(191998, samplerate * 0.0297 * roomscale);
