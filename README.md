@@ -12,7 +12,7 @@ The initial output is silent: all five gates are off. Output starts at −12 dB.
 
 `device/Hypna.amxd` is **frozen**: the controller script and the factory wavetable are bundled inside the file, so it is the only file you need to move or share. A frozen patcher opens read-only in Max.
 
-For patch work, `scripts/build.py` also writes `device/Hypna.dev.amxd`, an unfrozen device that reads `dream-control.js` and `dream-waves.wav` as siblings from `device/`. Keep that folder together when using it. The editable patch is `device/Hypna.maxpat`.
+For patch work, `scripts/build.py` also writes `device/Hypna.dev.amxd`, an unfrozen device that reads `hypna-control.js` and `hypna-waves.wav` as siblings from `device/`. Keep that folder together when using it. The editable patch is `device/Hypna.maxpat`.
 
 ## Tuning
 
@@ -64,7 +64,7 @@ All banks retain integer harmonics of each voice, preserving the prime-ratio tun
 
 For evolving drones, automate **Wave offset** with a slow sweep. The **Wavetable** parameter can also be automated and saved in the Set. The fundamental follows the bank when **Bass wave** is set to **Wavetable**; its dedicated Sine, Triangle, and Square modes remain independent of bank selection.
 
-This release adds a factory selector, not an import browser. The wavetable is frozen into `Hypna.amxd`; only the unfrozen `Hypna.dev.amxd` needs `dream-waves.wav` beside it. `dream-waves.json` describes the bank layout for development and is not required at runtime.
+This release adds a factory selector, not an import browser. The wavetable is frozen into `Hypna.amxd`; only the unfrozen `Hypna.dev.amxd` needs `hypna-waves.wav` beside it. `hypna-waves.json` describes the bank layout for development and is not required at runtime.
 
 ## Differences from the reference
 
@@ -92,13 +92,13 @@ Everything hand-maintained lives in `src/`; the whole `device/` folder is build 
 
 | `src/` | role |
 | --- | --- |
-| `dream-control.js` | The tuning controller, copied into `device/` and frozen into the device. |
-| `dream-engine.genexpr` | The GenExpr DSP, as real GenExpr. `scripts/build.py` expands it into the `gen~` patcher. |
-| `dream-waves.json` | Declares the wavetable layout: banks, frames, cycle length, and mip harmonics. |
+| `hypna-control.js` | The tuning controller, copied into `device/` and frozen into the device. |
+| `hypna-engine.genexpr` | The GenExpr DSP, as real GenExpr. `scripts/build.py` expands it into the `gen~` patcher. |
+| `hypna-waves.json` | Declares the wavetable layout: banks, frames, cycle length, and mip harmonics. |
 
-`src/dream-waves.json` is the single layout source. It drives the generated tables **and** supplies the constants the DSP indexes them with, so a layout change reaches both. `tests/structure.py` asserts the two agree; before, the indexing constants were hardcoded in the DSP and a change to the frame count would have silently produced wrong offsets.
+`src/hypna-waves.json` is the single layout source. It drives the generated tables **and** supplies the constants the DSP indexes them with, so a layout change reaches both. `tests/structure.py` asserts the two agree; before, the indexing constants were hardcoded in the DSP and a change to the frame count would have silently produced wrong offsets.
 
-`src/dream-engine.genexpr` uses three markers, because GenExpr has no arrays of `History` and the five voices must be unrolled:
+`src/hypna-engine.genexpr` uses three markers, because GenExpr has no arrays of `History` and the five voices must be unrolled:
 
 - `//@voices` … `//@end` repeats once per voice, with `$V` as the voice index and `$F` as that voice's default frequency.
 - `//@fundamental` … `//@end`, inside a voices block, emits for voice 0 only — the `Bass wave` overrides.

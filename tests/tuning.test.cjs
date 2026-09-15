@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const c = require('../device/dream-control.js');
+const c = require('../device/hypna-control.js');
 const defaults = () => ({base:29.135, octave:1, transpose:0, primes:[2,3,7,31], denominator:32, numerators:[42,56,62,63]});
 
 test('documented defaults and reduced ratios', () => {
@@ -47,7 +47,7 @@ test('initial UI messages cannot overwrite restored custom tuning', () => {
     const output=[];
     const context={outlet:(...x)=>output.push(x),patcher:{getnamed:name=>({getvalueof:()=>values[name],message:(selector,v)=>values[name]=v})}};
     vm.createContext(context);
-    vm.runInContext(fs.readFileSync(require.resolve('../device/dream-control.js'),'utf8'),context);
+    vm.runInContext(fs.readFileSync(require.resolve('../device/hypna-control.js'),'utf8'),context);
     context.messagename='prime0'; context.anything(2);
     assert.equal(output.length,0);
     context.restore();

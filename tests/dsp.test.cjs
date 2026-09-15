@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const root = path.join(__dirname, '../device');
-const wav = fs.readFileSync(path.join(root,'dream-waves.wav'));
+const wav = fs.readFileSync(path.join(root,'hypna-waves.wav'));
 const waveData = Float64Array.from({length:(wav.length-44)/2},(_,i)=>wav.readInt16LE(44+i*2)/32768);
 
 class Delay {
@@ -19,7 +19,7 @@ class Delay {
 }
 
 function engine(samplerate=48000) {
-    let code=fs.readFileSync(path.join(root,'dream-engine.genexpr'),'utf8').replace(/\/\/[^\n]*/g,'');
+    let code=fs.readFileSync(path.join(root,'hypna-engine.genexpr'),'utf8').replace(/\/\/[^\n]*/g,'');
     const functionEnd=code.indexOf('\nBuffer');
     const fn=code.slice(0,functionEnd);
     code=code.slice(functionEnd);

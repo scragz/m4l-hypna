@@ -13,12 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 OUT = ROOT / "device"
 OUT.mkdir(exist_ok=True)
+sys.path.insert(0, str(ROOT.parent / "theme"))
+import theme as T  # noqa: E402  shared device theme
 # HFS+ timestamps, which the collective directory uses, count from 1 Jan 1904.
 MAC_EPOCH = 2082844800
 
-# src/dream-waves.json declares the wavetable layout. It generates the tables
+# src/hypna-waves.json declares the wavetable layout. It generates the tables
 # and supplies the constants the DSP indexes them with, so the two cannot drift.
-LAYOUT = json.loads((SRC/'dream-waves.json').read_text())
+LAYOUT = json.loads((SRC/'hypna-waves.json').read_text())
 BANKS = LAYOUT['banks']
 FRAMES = LAYOUT['frames']
 CYCLE = LAYOUT['cycle_samples']
@@ -61,7 +63,7 @@ def make_waves():
     # Bank -> mip level -> morph frame -> sample. Compute each partial once,
     # snapshot bandwidth levels, and apply the full frame's gain to every mip.
     sines = [[math.sin(2*math.pi*h*i/CYCLE) for i in range(CYCLE)] for h in range(1, PARTIALS+1)]
-    with wave.open(str(OUT / "dream-waves.wav"), "wb") as wav:
+    with wave.open(str(OUT / "hypna-waves.wav"), "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(48000)
@@ -87,12 +89,12 @@ def make_waves():
                     levels[h].append(row.tobytes())
             for h in HARMONICS:
                 for row in levels[h]: wav.writeframesraw(row)
-    shutil.copy2(SRC/'dream-waves.json', OUT/'dream-waves.json')
+    shutil.copy2(SRC/'hypna-waves.json', OUT/'hypna-waves.json')
 
 
 def constants():
     """Layout constants the DSP indexes the wavetable with, all derived from
-    src/dream-waves.json so a layout change reaches the code that reads it."""
+    src/hypna-waves.json so a layout change reaches the code that reads it."""
     return {
         'BANKS': len(BANKS), 'BANKMAX': len(BANKS)-1,
         'MIPS': len(HARMONICS), 'MIPMAX': len(HARMONICS)-1,
@@ -134,7 +136,7 @@ def read_block(lines, start):
             depth += 1
         body.append(lines[index])
         index += 1
-    raise SystemExit('unterminated //@ block in ' + str(SRC/'dream-engine.genexpr'))
+    raise SystemExit('unterminated //@ block in ' + str(SRC/'hypna-engine.genexpr'))
 
 
 def emit_voice(body, voice, frequency):
@@ -154,7 +156,7 @@ def emit_voice(body, voice, frequency):
 
 
 def expand(template, frequencies):
-    """Expand src/dream-engine.genexpr into the DSP embedded in the patch."""
+    """Expand src/hypna-engine.genexpr into the DSP embedded in the patch."""
     lines = template.splitlines(keepends=True)
     output, index = [], 0
     while index < len(lines):
@@ -173,15 +175,14 @@ def expand(template, frequencies):
 
 def dsp_code():
     frequencies = [58.27, 58.27*42/32, 58.27*56/32, 58.27*62/32, 58.27*63/32]
-    return expand((SRC/'dream-engine.genexpr').read_text(), frequencies)
+    return expand((SRC/'hypna-engine.genexpr').read_text(), frequencies)
 
 
 def make_patch(code):
     patch = dict(fileversion=1, appversion=dict(major=8, minor=6, revision=5, architecture="x64", modernui=1),
-                 classnamespace="box", rect=[80, 100, 1110, 700], openrect=[0, 0, 1110, 169],
-                 openinpresentation=1, devicewidth=1110, default_fontname="Arial", default_fontsize=11,
-                 bglocked=1, bgcolor=[0.09, 0.10, 0.13, 1], editing_bgcolor=[0.15, 0.16, 0.19, 1],
-                 boxes=[], lines=[], parameters={}, dependency_cache=[], autosave=0)
+                 classnamespace="box", rect=[80, 100, 1110, 700], openrect=[0, 0, 1036, 169],
+                 openinpresentation=1, devicewidth=1036, bglocked=1,
+                 boxes=[], lines=[], parameters={}, dependency_cache=[], autosave=0, **T.patcher_attrs())
     patch['project'] = dict(version=1, amxdtype=1768515945, readonly=0, devpathtype=0, devpath=".", autoorganize=1, hideprojectwindow=1, autolocalize=0, contents={}, layout={}, searchpath={})
 
     def box(id, klass="newobj", text=None, rect=None, **kw):
@@ -195,21 +196,29 @@ def make_patch(code):
     def wire(src, dst, so=0, di=0):
         patch['lines'].append(dict(patchline=dict(source=[src, so], destination=[dst, di])))
 
-    def label(id, text, x, y, w, color=None, size=10):
+    def label(id, text, x, y, w, role='label', justify=0):
         box(id, "comment", text, [x, y, w, 18], presentation=1, presentation_rect=[x, y, w, 18],
-            textcolor=color or [0.73, 0.76, 0.81, 1], fontsize=size, varname=id)
+            varname=id, numinlets=1, numoutlets=0, **T.label(role, justify=justify))
 
-    def param(name, title, default, lo, hi, x, y, w=52, unit=0, enum=None, integer=False, tuning=False):
+    def readout(id, x, y, w):
+        box(id, "comment", '', [x, y, w, 18], presentation=1, presentation_rect=[x, y+1, w, 17],
+            varname=id, numinlets=1, numoutlets=0, **T.label('text', T.SPEC['font']['readout']))
+
+    def param(name, title, default, lo, hi, x, y, w=52, unit=0, enum=None, integer=False, tuning=False, toggle=False):
         attrs = dict(parameter_longname=title, parameter_shortname=title, parameter_type=0,
                      parameter_mmin=lo, parameter_mmax=hi, parameter_initial=[default], parameter_initial_enable=1,
                      parameter_unitstyle=unit, parameter_linknames=0)
-        klass = "live.numbox"
-        if enum:
+        klass, extra = "live.numbox", T.numbox()
+        if toggle:
+            klass = "live.text"
+            attrs.update(parameter_type=2, parameter_enum=enum, parameter_unitstyle=9)
+            extra = dict(T.button(), text=enum[0], texton=enum[1], mode=1)
+        elif enum:
             klass = "live.menu"
             attrs.update(parameter_type=2, parameter_enum=enum, parameter_unitstyle=9)
+            extra = dict(T.menu(), items=enum)
         elif integer and hi <= 255:
             attrs['parameter_type'] = 1
-        extra = dict(items=enum) if enum else {}
         box(name, klass, rect=[x, y, w, 18], presentation=1, presentation_rect=[x, y, w, 18],
             parameter_enable=1, varname=name, saved_attribute_attributes=dict(valueof=attrs), **extra)
         patch['parameters'][name] = [title, title, 0]
@@ -222,53 +231,53 @@ def make_patch(code):
         wire(integer_id, prep)
         wire(prep, 'control' if tuning else 'synth')
 
-    label('title', 'DREAM MACHINE', 12, 5, 200, [0.62, 0.83, 0.75, 1], 15)
-    label('subtitle', 'PRIME-RATIO DRONE INSTRUMENT', 208, 7, 260, size=10)
-    label('prime-label', 'Primes', 12, 34, 55)
+    # Fieldsets: Tuning and Wavetable stacked at left, then Voices, Motion, Space.
+    art = dict(width=1036, height=169, fieldsets=[
+        [2, 0, 264, 90, 'Tuning'], [2, 92, 264, 76, 'Wavetable'], [270, 0, 424, 168, 'Voices'],
+        [698, 0, 166, 168, 'Motion'], [868, 0, 166, 168, 'Space']])
+    label('prime-label', 'Primes', 10, 22, 62)
     for i, value in enumerate([2, 3, 7, 31]):
-        param('prime'+str(i), 'Prime '+str(i+1), value, 2 if i==0 else 1, 32767, 63+i*49, 34, 44, integer=True, tuning=True)
-    label('base-label', 'Base Hz', 12, 62, 55)
-    param('base', 'Base frequency', 29.135, 0.001, 32.767, 63, 62, 77, unit=1, tuning=True)
-    label('octave-label', 'Octave', 151, 62, 45)
-    param('octave', 'Octave', 1, -8, 8, 200, 62, 58, integer=True, tuning=True)
-    label('den-label', 'Denom.', 12, 90, 50)
-    param('denominator', 'Denominator', 32, 1, 256, 63, 90, 77, integer=True, tuning=True)
-    label('trans-label', 'Transpose', 146, 90, 58)
-    param('transpose', 'Transpose', 0, -60, 60, 207, 90, 51, unit=7, integer=True, tuning=True)
-    label('shape-label', 'Bass wave', 12, 118, 60)
-    param('shape', 'Fundamental waveform', 0, 0, 3, 77, 118, 181, enum=['Wavetable', 'Sine', 'Triangle', 'Square'])
-    label('wavetable-label', 'Wavetable', 12, 144, 60)
-    param('wavetable', 'Wavetable', 0, 0, len(BANKS)-1, 77, 144, 181, enum=BANKS)
+        param('prime'+str(i), 'Prime '+str(i+1), value, 2 if i==0 else 1, 32767, 74+i*47, 22, 44, integer=True, tuning=True)
+    label('base-label', 'Base Hz', 10, 44, 62)
+    param('base', 'Base frequency', 29.135, 0.001, 32.767, 74, 44, 62, unit=1, tuning=True)
+    label('octave-label', 'Octave', 142, 44, 52)
+    param('octave', 'Octave', 1, -8, 8, 196, 44, 62, integer=True, tuning=True)
+    label('den-label', 'Denom.', 10, 66, 62)
+    param('denominator', 'Denominator', 32, 1, 256, 74, 66, 62, integer=True, tuning=True)
+    label('trans-label', 'Transpose', 142, 66, 52)
+    param('transpose', 'Transpose', 0, -60, 60, 196, 66, 62, unit=7, integer=True, tuning=True)
+    label('shape-label', 'Bass Wave', 10, 114, 62)
+    param('shape', 'Fundamental waveform', 0, 0, 3, 74, 114, 184, enum=['Wavetable', 'Sine', 'Triangle', 'Square'])
+    label('wavetable-label', 'Table', 10, 140, 62)
+    param('wavetable', 'Wavetable', 0, 0, len(BANKS)-1, 74, 140, 184, enum=BANKS)
 
-    for title, x, w in [('Voice', 281, 65), ('Gate', 349, 32), ('Numerator', 390, 68), ('Ratio / Hz', 469, 155), ('dB', 627, 47), ('Pan', 686, 47)]:
-        label('header-'+title, title, x, 29, w)
+    for title, x, w in [('Voice', 280, 56), ('Gate', 338, 36), ('Numerator', 380, 66), ('Ratio / Hz', 452, 116), ('Gain', 572, 54), ('Pan', 632, 54)]:
+        label('header-'+title, title, x, 20, w)
     for i in range(5):
-        y = 50+i*22
-        label('voice'+str(i), 'Fund.' if i==0 else 'Tone '+str(i), 281, y, 65)
-        param('gate'+str(i), 'Gate '+str(i), 0, 0, 1, 349, y, 31, enum=['Off', 'On'])
+        y = 40+i*25
+        label('voice'+str(i), 'Fund.' if i==0 else 'Tone '+str(i), 280, y, 56)
+        param('gate'+str(i), 'Gate '+str(i), 0, 0, 1, 338, y, 36, enum=['Off', 'On'], toggle=True)
         if i:
-            param('numerator'+str(i-1), 'Numerator '+str(i), [42,56,62,63][i-1], 1, 1024, 390, y, 66, integer=True, tuning=True)
+            param('numerator'+str(i-1), 'Numerator '+str(i), [42,56,62,63][i-1], 1, 1024, 380, y, 66, integer=True, tuning=True)
         else:
-            label('fundamental-ratio', '—', 390, y, 66)
-        label('pitch'+str(i), '', 469, y, 155)
-        param('gain'+str(i), 'Gain '+str(i), 0, -40, 6, 627, y, 47, unit=4)
+            label('fundamental-ratio', '1/1', 380, y, 66, 'dim', justify=1)
+        readout('pitch'+str(i), 452, y, 116)
+        param('gain'+str(i), 'Gain '+str(i), 0, -40, 6, 572, y, 54, unit=4)
         if i:
-            param('pan'+str(i), 'Pan '+str(i), 0, -100, 100, 686, y, 47, unit=0)
+            param('pan'+str(i), 'Pan '+str(i), 0, -100, 100, 632, y, 54, unit=0)
         else:
-            label('center', 'Center', 686, y, 47)
+            label('center', 'Center', 632, y, 54, 'dim', justify=1)
 
-    label('motion-title', 'TONE / MOTION', 750, 29, 163, [0.62, 0.83, 0.75, 1])
-    label('space-title', 'SPACE / OUTPUT', 933, 29, 160, [0.62, 0.83, 0.75, 1])
-    for name, title, default, lo, hi, y, unit in [
-        ('wavepos','Wave offset',0,-100,100,50,0), ('attack','Attack',10,0,30000,72,2),
-        ('release','Release',1000,0,60000,94,2), ('slew','Slew',0,0,10000,116,2), ('crossfade','Crossfade',20,0,10000,138,2)]:
-        label(name+'-label', title, 750, y, 87)
-        param(name,title,default,lo,hi,840,y,76,unit=unit)
-    for name, title, default, lo, hi, y, unit in [
-        ('wet','Reverb mix',0,0,100,50,5), ('revtime','Reverb time',1700,400,30000,72,2),
-        ('size','Size',100,1,100,94,5), ('damping','High damp',60,0,100,116,0), ('master','Output',-12,-60,0,138,4)]:
-        label(name+'-label', title, 933, y, 87)
-        param(name,title,default,lo,hi,1023,y,75,unit=unit)
+    for i, (name, title, default, lo, hi, unit) in enumerate([
+        ('wavepos','Wave Offset',0,-100,100,0), ('attack','Attack',10,0,30000,2),
+        ('release','Release',1000,0,60000,2), ('slew','Slew',0,0,10000,2), ('crossfade','Crossfade',20,0,10000,2)]):
+        label(name+'-label', title, 708, 24+i*27, 72)
+        param(name,title,default,lo,hi,780,24+i*27,76,unit=unit)
+    for i, (name, title, default, lo, hi, unit) in enumerate([
+        ('wet','Reverb Mix',0,0,100,5), ('revtime','Reverb Time',1700,400,30000,2),
+        ('size','Size',100,1,100,5), ('damping','High Damp',60,0,100,0), ('master','Output',-12,-60,0,4)]):
+        label(name+'-label', title, 878, 24+i*27, 72)
+        param(name,title,default,lo,hi,950,24+i*27,76,unit=unit)
 
     gen = dict(fileversion=1, classnamespace="dsp.gen", rect=[100, 100, 950, 700], boxes=[
         dict(box=dict(id='code', maxclass='codebox', code=code, numinlets=0, numoutlets=4, patching_rect=[40, 40, 850, 570]))], lines=[])
@@ -277,11 +286,11 @@ def make_patch(code):
         gen['lines'].append(dict(patchline=dict(source=['code',i],destination=['out'+str(i),0])))
     # Max records a js object's script in saved_object_attributes; freezing
     # resolves the dependency from there, not from the box text.
-    box('control', text='js dream-control.js', rect=[30, 225, 160, 22], numinlets=1, numoutlets=1,
-        saved_object_attributes=dict(filename='dream-control.js', parameter_enable=0))
+    box('control', text='js hypna-control.js', rect=[30, 225, 160, 22], numinlets=1, numoutlets=1,
+        saved_object_attributes=dict(filename='hypna-control.js', parameter_enable=0))
     box('synth', text='gen~', rect=[400, 290, 100, 22], numinlets=1, numoutlets=4, outlettype=['signal']*4, patcher=gen)
     wire('control','synth')
-    box('table',text='buffer~ dream_machine_factory_v2 dream-waves.wav',rect=[30,260,345,22])
+    box('table',text='buffer~ hypna_factory_v2 hypna-waves.wav',rect=[30,260,345,22])
     box('midi',text='midiin',rect=[30,300,60,22])
     box('live-init',text='live.thisdevice',rect=[30,340,120,22])
     box('init-defer',text='deferlow',rect=[30,375,80,22])
@@ -292,7 +301,12 @@ def make_patch(code):
     label('raw-comment','Gen outputs 3 and 4: raw fundamental and envelope inspection taps.',400,430,550)
     # Inspection guidance belongs in the editor, not the device presentation.
     patch['boxes'][-1]['box']['presentation'] = 0
-    patch['dependency_cache'] = [dict(name='dream-control.js',type='TEXT',implicit=1),dict(name='dream-waves.wav',type='WAVE',implicit=1)]
+    # Background art sits last: Max draws later boxes behind earlier ones in this build's ordering.
+    box('art', 'jsui', rect=[0, 0, 1036, 169], presentation=1, presentation_rect=[0, 0, 1036, 169], filename='hypna-art.js',
+        border=0, ignoreclick=1, background=1, numinlets=1, numoutlets=1, outlettype=[''], parameter_enable=0)
+    T.write_jsui(OUT, 'hypna', art)
+    patch['dependency_cache'] = [dict(name='hypna-control.js',type='TEXT',implicit=1),dict(name='hypna-waves.wav',type='WAVE',implicit=1),
+                                 dict(name='hypna-theme.js',type='TEXT',implicit=1),dict(name='hypna-art.js',type='TEXT',implicit=1)]
     patch['parameters']['parameterbanks'] = {
         '0': dict(index=0,name='Tuning',parameters=['base','octave','transpose','denominator','numerator0','numerator1','numerator2','numerator3']),
         '1': dict(index=1,name='Tone',parameters=['wavepos','shape','attack','release','slew','crossfade','wet','master']),
@@ -335,7 +349,7 @@ def collective(name, document, dependencies):
     footer of one 'dire' record per file. Header words two and three are a single
     64-bit big-endian offset to that footer. Each record carries the file's type
     code, name, size, absolute offset, and modification date, so Max can resolve
-    `js dream-control.js` and `buffer~ ... dream-waves.wav` from inside the
+    `js hypna-control.js` and `buffer~ ... hypna-waves.wav` from inside the
     device instead of from sibling files on disk.
     """
     entries = []
@@ -369,9 +383,9 @@ def collective(name, document, dependencies):
 if __name__ == '__main__':
     make_waves()
     code = dsp_code()
-    (OUT/'dream-engine.genexpr').write_text(code)
+    (OUT/'hypna-engine.genexpr').write_text(code)
     # copy2 keeps the source timestamp, which the frozen directory records.
-    shutil.copy2(SRC/'dream-control.js', OUT/'dream-control.js')
+    shutil.copy2(SRC/'hypna-control.js', OUT/'hypna-control.js')
     data = json.dumps(make_patch(code), indent=2).encode()+b'\n'
     (OUT/'Hypna.maxpat').write_bytes(data)
     # Development device: the patch alone, reading its dependencies from device/.

@@ -66,7 +66,7 @@ assert json.loads(outer('Hypna.dev.amxd').rstrip(b'\0')) == source
 
 # The distribution device is frozen: patcher plus every dependency, in one file.
 frozen = unfreeze(outer('Hypna.amxd'))
-assert list(frozen) == ['Hypna.amxd', 'dream-control.js', 'dream-waves.wav']
+assert list(frozen) == ['Hypna.amxd', 'hypna-control.js', 'hypna-waves.wav', 'hypna-theme.js', 'hypna-art.js']
 kind, flag, patch_data = frozen['Hypna.amxd']
 assert (kind, flag) == ('JSON', 17)
 doc = json.loads(patch_data.rstrip(b'\0'))
@@ -74,11 +74,11 @@ doc = json.loads(patch_data.rstrip(b'\0'))
 assert doc['patcher'].pop('project')['readonly'] == 1
 assert source['patcher'].pop('project')['readonly'] == 0
 assert doc == source
-for dependency in ['dream-control.js', 'dream-waves.wav']:
+for dependency in ['hypna-control.js', 'hypna-waves.wav', 'hypna-theme.js', 'hypna-art.js']:
     kind, flag, data = frozen[dependency]
     assert flag == 0 and data == (root/dependency).read_bytes(), dependency
-assert frozen['dream-control.js'][0] == 'TEXT'
-assert frozen['dream-waves.wav'][0] == 'WAVE'
+assert frozen['hypna-control.js'][0] == 'TEXT'
+assert frozen['hypna-waves.wav'][0] == 'WAVE'
 doc = json.loads((root/'Hypna.maxpat').read_text())
 
 def check(p):
@@ -103,16 +103,16 @@ for name,b in boxes.items():
         assert any(e['patchline']['source'][0]==name for e in p['lines'])
 for dep in p['dependency_cache']:
     assert (root/dep['name']).is_file()
-assert boxes['synth']['patcher']['boxes'][0]['box']['code']==(root/'dream-engine.genexpr').read_text()
-catalog=json.loads((root/'dream-waves.json').read_text())
+assert boxes['synth']['patcher']['boxes'][0]['box']['code']==(root/'hypna-engine.genexpr').read_text()
+catalog=json.loads((root/'hypna-waves.json').read_text())
 banks,mips,frames,cycle=len(catalog['banks']),len(catalog['harmonics']),catalog['frames'],catalog['cycle_samples']
-with wave.open(str(root/'dream-waves.wav')) as w:
+with wave.open(str(root/'hypna-waves.wav')) as w:
     assert (w.getnchannels(),w.getsampwidth(),w.getnframes())==(1,2,banks*mips*frames*cycle)
 
 # The DSP indexes the table with constants expanded from the same manifest that
 # generated it. If a layout change ever reaches one and not the other, the device
 # reads the wrong offsets and still sounds plausible, so assert they agree.
-dsp=(root/'dream-engine.genexpr').read_text()
+dsp=(root/'hypna-engine.genexpr').read_text()
 indexing=re.search(r'offset = \(\(clamp\(floor\(bank\), 0, (\d+)\) \* (\d+) \+ level\) \* (\d+) \+ first\) \* (\d+);',dsp)
 assert indexing, 'wavetable indexing line not found in the generated DSP'
 assert [int(n) for n in indexing.groups()]==[banks-1,mips,frames,cycle]
@@ -133,6 +133,6 @@ assert boxes['wavetable']['saved_attribute_attributes']['valueof']['parameter_in
 assert boxes['wavetable-message']['text']=='prepend wavetable'
 assert any(e['patchline']['source']==['wavetable-message',0] and e['patchline']['destination']==['synth',0] for e in p['lines'])
 assert 'wavetable' in p['parameters']['parameterbanks']['3']['parameters']
-assert 'dream_machine_factory_v2' in boxes['table']['text']
+assert 'hypna_factory_v2' in boxes['table']['text']
 print('Frozen and development AMXD containers, patch wiring, parameter persistence metadata, '
       'presentation bounds, and wavetable checks passed.')

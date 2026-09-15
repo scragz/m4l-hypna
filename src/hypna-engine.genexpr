@@ -1,9 +1,9 @@
 //@doc
-// Build input for scripts/build.py; device/dream-engine.genexpr is its output.
+// Build input for scripts/build.py; device/hypna-engine.genexpr is its output.
 // `//@voices` blocks repeat once per voice, with $V as the voice index and $F
 // as that voice's default frequency. A `//@fundamental` block inside one emits
 // for voice 0 only. Every other $NAME is a layout constant read from
-// src/dream-waves.json, so the wavetable and the code indexing it cannot drift
+// src/hypna-waves.json, so the wavetable and the code indexing it cannot drift
 // apart. This block itself is stripped from the output.
 //@end
 // Factory table: $BANKS banks, $MIPS bandwidth levels, $FRAMES frames.
@@ -21,7 +21,7 @@ tableosc(ph, hz, position, sr, table, bank) {
     w1 = mix(peek(table, offset + $CYCLE + a, 0), peek(table, offset + $CYCLE + b, 0), frac);
     return mix(w0, w1, blend);
 }
-Buffer waves("dream_machine_factory_v2");
+Buffer waves("hypna_factory_v2");
 Param wavetable(0);
 Param wavepos(0);
 Param shape(0);
