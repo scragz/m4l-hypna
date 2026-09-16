@@ -11,8 +11,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
-OUT = ROOT / "device"
-OUT.mkdir(exist_ok=True)
+# OUT holds editable staging sources (loose deps + the unfrozen dev device);
+# DEST holds only the final, self-contained frozen device.
+OUT = ROOT / "scripts" / "build"
+OUT.mkdir(parents=True, exist_ok=True)
+DEST = ROOT / "device"
+DEST.mkdir(exist_ok=True)
 sys.path.insert(0, str(ROOT.parent / "theme"))
 import theme as T  # noqa: E402  shared device theme
 # HFS+ timestamps, which the collective directory uses, count from 1 Jan 1904.
@@ -394,6 +398,6 @@ if __name__ == '__main__':
     # travel inside the file. A frozen patcher is read-only in Max.
     document = json.loads(data)
     document['patcher']['project'] = dict(document['patcher']['project'], readonly=1)
-    (OUT/'Hypna.amxd').write_bytes(amxd(
+    (DEST/'Hypna.amxd').write_bytes(amxd(
         collective('Hypna.amxd', document, document['patcher']['dependency_cache']), meta=7))
     print('Built Hypna.maxpat, frozen Hypna.amxd, Hypna.dev.amxd, and factory wavetable.')
